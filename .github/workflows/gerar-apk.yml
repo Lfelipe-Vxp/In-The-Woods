@@ -14,40 +14,40 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Descompactar o projeto
-        run: for z in *.zip; do unzip -q -o "$z"; done
+        shell: bash
+        run: |
+          for z in *.zip; do unzip -q -o "$z"; done 2>&1 | tee build.log
+          ls -la in-the-woods-android 2>&1 | tee -a build.log
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Instalar Capacitor
-        working-directory: in-the-woods-android
-        run: npm run setup
-
-      - name: Criar projeto Android
-        working-directory: in-the-woods-android
-        run: npm run add-android
-
-      - name: Gerar icones
-        working-directory: in-the-woods-android
-        run: npm run icons
-
-      - name: Copiar o jogo
-        working-directory: in-the-woods-android
-        run: npm run sync
-
-      - name: Compilar o APK
+      - name: Construir o APK
+        shell: bash
         working-directory: in-the-woods-android
         run: |
-          chmod +x android/gradlew
-          cd android && ./gradlew assembleDebug
+          {
+            set -ex
+            node -v
+            java -version
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+            npm install --no-audit --no-fund --legacy-peer-deps @capacitor/core @capacitor/android
+            npm install --no-audit --no-fund --legacy-peer-deps -D @capacitor/cli @capacitor/assets
+            npx cap add android
+            node scripts/patch-android.js
+            npx @capacitor/assets generate --android
+            npx cap sync android
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          } 2>&1 | tee -a ../build.log
 
       - name: Renomear APK
         run: cp in-the-woods-android/android/app/build/outputs/apk/debug/app-debug.apk In-The-Woods.apk
@@ -59,3 +59,13 @@ jobs:
           name: In The Woods v1.${{ github.run_number }}
           files: In-The-Woods.apk
           make_latest: true
+
+      - name: Mostrar o erro (somente se falhar)
+        if: failure()
+        shell: bash
+        run: |
+          [ -f build.log ] || echo "sem log (falhou antes de construir)" > build.log
+          tail -n 40 build.log | cut -c1-200 > erro.txt
+          { echo '### Erro no build'; echo '```'; cat erro.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          msg=$(sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' erro.txt)
+          echo "::error title=Erro no build::$msg"
